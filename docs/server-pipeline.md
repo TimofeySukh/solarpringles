@@ -161,6 +161,19 @@ Recommended initial API surface:
 - `GET /api/status`
 - live stream endpoint for new points
 
+### Implemented MVP API Surface
+
+The current scaffold now includes:
+
+- `GET /api/history`
+- `GET /api/live`
+- `GET /api/status`
+- `GET /healthz`
+
+`/api/live` uses Server-Sent Events so the frontend can stream updates without reloading the page.
+
+`/api/history` returns aggregated day data from InfluxDB with a configurable interval in minutes.
+
 ## Frontend
 
 The frontend should be lightweight and visually polished.
@@ -173,6 +186,18 @@ Requirements:
 - day trend chart
 - live updates
 - status badge driven by heuristics for now
+
+### Implemented MVP Frontend
+
+The current frontend is intentionally kept in a single `index.html` file for simple deployment.
+
+It includes:
+
+- same-origin API access through Nginx proxying to the backend container
+- a large real-time Chart.js line chart
+- a current voltage panel
+- a live connection state indicator
+- a heuristic condition badge based on voltage thresholds
 
 Suggested status labels:
 

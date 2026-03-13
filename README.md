@@ -62,6 +62,14 @@ Initial server layout:
 - `server/frontend/`
 - `server/data/exports/`
 
+The MVP backend now exposes:
+
+- `GET /api/history` for aggregated day data
+- `GET /api/live` as an SSE stream for real-time telemetry
+- `GET /api/status` for a compact runtime summary
+
+The frontend is a single-file dashboard that proxies API traffic through Nginx and renders a real-time Chart.js line chart plus a heuristic status widget.
+
 ## Development
 
 - Use English everywhere in the repository: code, comments, logs, API messages, UI text, and docs.
