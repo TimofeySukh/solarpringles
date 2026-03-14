@@ -162,7 +162,9 @@ def read_latest_insights() -> dict[str, Any] | None:
     insights_path = Path(SETTINGS.model_registry_dir) / "insights" / "latest.json"
     if not insights_path.exists():
         return None
-    return json.loads(insights_path.read_text(encoding="utf-8"))
+    insights = json.loads(insights_path.read_text(encoding="utf-8"))
+    insights["available"] = True
+    return insights
 
 
 def read_insights_history(limit: int = 96) -> list[dict[str, Any]]:
@@ -367,7 +369,6 @@ def api_insights() -> dict[str, Any]:
             "timezone": SETTINGS.timezone_name,
             "message": "ML insights are not ready yet",
         }
-    insights["available"] = True
     return insights
 
 
