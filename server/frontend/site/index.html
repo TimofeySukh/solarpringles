@@ -202,6 +202,7 @@
         box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.018);
         padding: 18px;
         min-width: 0;
+        overflow: hidden;
       }
 
       .panel.main-trend {
@@ -240,8 +241,22 @@
 
       .chart-box {
         position: relative;
-        height: 100%;
-        min-height: 250px;
+        height: 280px;
+        min-height: 280px;
+        max-height: 280px;
+      }
+
+      .panel.main-trend .chart-box,
+      .panel.span-2 .chart-box {
+        height: 360px;
+        min-height: 360px;
+        max-height: 360px;
+      }
+
+      .chart-box canvas {
+        display: block;
+        width: 100% !important;
+        height: 100% !important;
       }
 
       .grid-two {
@@ -543,6 +558,24 @@
         return new Chart(context, configFactory(context));
       }
 
+      const VOLTAGE_AXIS = {
+        min: 0,
+        max: 0.55,
+        grace: 0,
+      };
+
+      const DELTA_AXIS = {
+        min: -0.02,
+        max: 0.02,
+        grace: 0,
+      };
+
+      const RESIDUAL_AXIS = {
+        min: -180,
+        max: 180,
+        grace: 0,
+      };
+
       const trendChart = buildChart("trendChart", (context) => ({
         type: "line",
         data: {
@@ -572,6 +605,7 @@
         },
         options: baseChartOptions({
           yLabelFormatter: (value) => `${Number(value).toFixed(2)} V`,
+          yAxis: VOLTAGE_AXIS,
         }),
       }));
 
@@ -595,6 +629,7 @@
         options: baseChartOptions({
           yLabelFormatter: (value) => `${Number(value).toFixed(3)} V`,
           maxTicksLimit: 8,
+          yAxis: VOLTAGE_AXIS,
         }),
       }));
 
@@ -617,6 +652,7 @@
         options: baseChartOptions({
           yLabelFormatter: (value) => `${Number(value).toFixed(4)} V/s`,
           maxTicksLimit: 8,
+          yAxis: DELTA_AXIS,
         }),
       }));
 
@@ -641,14 +677,17 @@
         options: baseChartOptions({
           yLabelFormatter: (value) => `${Number(value).toFixed(1)} min`,
           maxTicksLimit: 10,
+          yAxis: RESIDUAL_AXIS,
         }),
       }));
 
-      function baseChartOptions({ yLabelFormatter, maxTicksLimit = 10 }) {
+      function baseChartOptions({ yLabelFormatter, maxTicksLimit = 10, yAxis = {} }) {
         return {
           responsive: true,
           maintainAspectRatio: false,
           animation: false,
+          normalized: true,
+          resizeDelay: 150,
           interaction: {
             intersect: false,
             mode: "index",
@@ -671,22 +710,37 @@
           },
           scales: {
             x: {
+              offset: false,
+              bounds: "ticks",
               ticks: {
                 color: "#86a99b",
                 maxTicksLimit,
+                autoSkip: true,
               },
               grid: {
                 color: "rgba(88, 255, 169, 0.06)",
               },
             },
             y: {
+              min: yAxis.min,
+              max: yAxis.max,
+              grace: yAxis.grace ?? 0,
               ticks: {
                 color: "#86a99b",
                 callback: yLabelFormatter,
+                maxTicksLimit: 6,
               },
               grid: {
                 color: "rgba(88, 255, 169, 0.08)",
               },
+            },
+          },
+          elements: {
+            line: {
+              capBezierPoints: true,
+            },
+            point: {
+              radius: 0,
             },
           },
         };
