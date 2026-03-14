@@ -30,7 +30,7 @@ class Settings:
     default_sensor_id: str = os.getenv("INFLUXDB_SENSOR_ID", "pringles_1")
     timezone_name: str = os.getenv("SOLAR_TIMEZONE", "Europe/Copenhagen")
     model_registry_dir: str = os.getenv("MODEL_REGISTRY_DIR", "/models")
-    live_poll_interval_seconds: float = float(os.getenv("LIVE_POLL_INTERVAL_SECONDS", "0.25"))
+    live_poll_interval_seconds: float = float(os.getenv("LIVE_POLL_INTERVAL_SECONDS", "1.0"))
 
 
 SETTINGS = Settings()
