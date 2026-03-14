@@ -90,3 +90,33 @@ After updating the tunnel or proxy rules:
 - Prefer host-based routing over path-based routing for clean isolation.
 - Keep the solar stack on its own Docker network unless shared proxy access requires a controlled bridge.
 - Document the final chosen routing pattern once the real server layout is inspected.
+
+## Systemd Management
+
+For reboot-safe operation on the primary server, run `cloudflared` under `systemd` instead of a manual `nohup` process.
+
+Repository template:
+
+- `server/cloudflared/cloudflared.service`
+
+Expected runtime details on the server:
+
+- binary: `/usr/local/bin/cloudflared`
+- config: `/home/server/.cloudflared/config.yml`
+- credentials file: referenced from that `config.yml`
+
+Recommended cutover:
+
+1. install the `systemd` unit
+2. run `systemctl daemon-reload`
+3. `enable --now` the service
+4. verify the new managed process is healthy
+5. stop the old manually started process only after the managed service is up
+
+Verification commands:
+
+```bash
+systemctl status cloudflared --no-pager
+systemctl is-enabled cloudflared
+journalctl -u cloudflared -f
+```
