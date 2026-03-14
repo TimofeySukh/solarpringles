@@ -142,7 +142,7 @@ The current `ml_engine` implementation computes:
 - `voltage_to_daily_max_ratio`
 - `raw_window_range_5s`
 - `effective_voltage` as the base training signal
-- clock features such as `hour` and `minute`
+- `raw_voltage` and `smoothed_voltage` reference signals for the honest solar-clock regressor
 
 Training cadence:
 
@@ -152,6 +152,8 @@ Current model choices:
 
 - lightweight `RandomForestClassifier` for phase detection
 - lightweight `LinearRegression` regressors for time estimation
+
+The current online-training stack intentionally does not feed `hour` or `minute` into any live model. The solar-clock regressor is trained from light-derived features only, and the phase classifier also avoids direct clock inputs.
 
 Current targets:
 

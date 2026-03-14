@@ -203,7 +203,7 @@
       .banner-row {
         display: grid;
         gap: 14px;
-        grid-template-columns: repeat(5, minmax(0, 1fr));
+        grid-template-columns: repeat(6, minmax(0, 1fr));
         padding: 18px 24px 10px;
       }
 
@@ -458,6 +458,12 @@
             <div class="card-value prediction-tone" id="confidenceValue">Unavailable</div>
             <div class="card-meta" id="confidenceMeta">Waiting for the latest model snapshot.</div>
           </article>
+
+          <article class="banner-card">
+            <div class="card-label">AI Bias</div>
+            <div class="card-value danger-tone" id="biasValue">Unavailable</div>
+            <div class="card-meta" id="biasMeta">Average solar-clock drift versus system time over the last hour.</div>
+          </article>
         </section>
 
         <section class="command-grid">
@@ -485,9 +491,9 @@
             </div>
             <div class="grid-two">
               <div class="mini-tile">
-                <div class="card-label">AI Time Estimate</div>
+                <div class="card-label">AI Solar Clock</div>
                 <div class="mini-value prediction-tone" id="aiTimeEstimate">--:--</div>
-                <div class="card-meta" id="aiTimeMeta">Waiting for training output.</div>
+                <div class="card-meta" id="aiTimeMeta">Guessing time based purely on light levels.</div>
               </div>
               <div class="mini-tile">
                 <div class="card-label">Estimated Sunset</div>
@@ -502,7 +508,7 @@
               <div class="mini-tile">
                 <div class="card-label">Residual Drift</div>
                 <div class="mini-value danger-tone" id="residualNow">-- min</div>
-                <div class="card-meta" id="residualMeta">Difference between system time and AI time estimate.</div>
+                <div class="card-meta" id="residualMeta">Difference between system time and the AI solar clock.</div>
               </div>
             </div>
           </article>
@@ -540,7 +546,7 @@
               <div>
                 <p class="eyebrow">AI Prediction Error</p>
                 <h2 class="panel-title">Residuals Timeline</h2>
-                <p class="panel-subtitle">Signed drift between actual local time and the AI time estimate.</p>
+                <p class="panel-subtitle">Signed drift between actual local time and the AI solar clock.</p>
               </div>
               <div class="panel-value" id="residualSeriesMeta">Recent training cycles</div>
             </div>
@@ -584,6 +590,8 @@
         uptimeValue: document.getElementById("uptimeValue"),
         confidenceValue: document.getElementById("confidenceValue"),
         confidenceMeta: document.getElementById("confidenceMeta"),
+        biasValue: document.getElementById("biasValue"),
+        biasMeta: document.getElementById("biasMeta"),
         dayRangeMeta: document.getElementById("dayRangeMeta"),
         liveWindowMeta: document.getElementById("liveWindowMeta"),
         deltaMeta: document.getElementById("deltaMeta"),
@@ -624,8 +632,8 @@
       };
 
       const RESIDUAL_AXIS = {
-        min: -180,
-        max: 180,
+        min: -10,
+        max: 10,
         grace: 0,
       };
 
@@ -847,6 +855,13 @@
         return `${minutes}m`;
       }
 
+      function formatSignedMinutes(value) {
+        if (typeof value !== "number" || Number.isNaN(value)) {
+          return "Unavailable";
+        }
+        return `${value >= 0 ? "+" : ""}${value.toFixed(2)} min`;
+      }
+
       function statusClass(status) {
         return `status-${status.toLowerCase().replace(/\s+/g, "-")}`;
       }
@@ -906,6 +921,13 @@
       }
 
       function updateResidualChart(points) {
+        const residualValues = points
+          .map((point) => point.residual_minutes)
+          .filter((value) => typeof value === "number" && Number.isFinite(value));
+        const peakResidual = residualValues.length ? Math.max(...residualValues.map((value) => Math.abs(value))) : 0;
+        const residualBound = Math.max(5, Math.ceil((peakResidual * 1.35 + 1) * 2) / 2);
+        residualChart.options.scales.y.min = -residualBound;
+        residualChart.options.scales.y.max = residualBound;
         residualChart.data.labels = points.map((point) => formatDateTime(point.timestamp_local ?? point.timestamp));
         residualChart.data.datasets[0].data = points.map((point) => point.residual_minutes ?? null);
         residualChart.update("none");
@@ -917,6 +939,10 @@
           : "-- / -- / --";
         dom.snrValue.textContent = analytics.stats.snr_db !== null ? `${analytics.stats.snr_db.toFixed(2)} dB` : "Unavailable";
         dom.uptimeValue.textContent = formatUptime(analytics.stats.uptime_seconds);
+        dom.biasValue.textContent = formatSignedMinutes(analytics.stats.bias_minutes_last_hour);
+        dom.biasMeta.textContent = analytics.stats.bias_sample_count_last_hour > 0
+          ? `Average solar-clock drift over the last hour from ${analytics.stats.bias_sample_count_last_hour} residual samples.`
+          : "Bias will appear after enough recent training cycles.";
         dom.liveWindowMeta.textContent = `Last ${analytics.volatility_window_seconds} seconds`;
         dom.deltaMeta.textContent = `${analytics.volatility_points.length} live points in the rolling window`;
         dom.residualSeriesMeta.textContent = `${analytics.ai_residuals.length} residual samples from recent training cycles`;
@@ -931,7 +957,7 @@
       function updateInsights(insights) {
         if (!insights || !insights.available) {
           dom.aiTimeEstimate.textContent = "--:--";
-          dom.aiTimeMeta.textContent = "ML engine has not emitted a snapshot yet.";
+          dom.aiTimeMeta.textContent = "Guessing time based purely on light levels. ML engine has not emitted a snapshot yet.";
           dom.sunsetEstimate.textContent = "Unavailable";
           dom.sunsetMeta.textContent = "Sunset ETA will appear after the next stable training cycle.";
           dom.sunriseEstimate.textContent = "Unavailable";
@@ -939,14 +965,14 @@
           dom.confidenceValue.textContent = "Unavailable";
           dom.confidenceMeta.textContent = "Confidence is derived from holdout error.";
           dom.residualNow.textContent = "-- min";
-          dom.residualMeta.textContent = "Residual drift will appear with the next trained time model.";
+          dom.residualMeta.textContent = "Residual drift will appear with the next trained solar-clock model.";
           return;
         }
 
         dom.aiTimeEstimate.textContent = insights.ai_time_estimate?.display_time || "--:--";
         dom.aiTimeMeta.textContent = insights.ai_time_estimate?.mae_minutes !== null
-          ? `MAE ${insights.ai_time_estimate.mae_minutes} min, R² ${insights.ai_time_estimate.r2_score}`
-          : "Time estimate model is warming up.";
+          ? `Guessing time based purely on light levels. MAE ${insights.ai_time_estimate.mae_minutes} min, R² ${insights.ai_time_estimate.r2_score}`
+          : "Guessing time based purely on light levels. The solar-clock model is warming up.";
         dom.sunsetEstimate.textContent = insights.estimated_sunset?.display_eta || "Unavailable";
         dom.sunsetMeta.textContent = insights.estimated_sunset?.mae_minutes !== null
           ? `MAE ${insights.estimated_sunset.mae_minutes} min, confidence ${insights.estimated_sunset.confidence}.`
@@ -962,10 +988,10 @@
 
         if (insights.residual_minutes !== null && insights.residual_minutes !== undefined) {
           dom.residualNow.textContent = `${insights.residual_minutes.toFixed(2)} min`;
-          dom.residualMeta.textContent = "Signed drift between the AI clock and system time.";
+          dom.residualMeta.textContent = "Signed drift between the AI solar clock and system time.";
         } else {
           dom.residualNow.textContent = "Unavailable";
-          dom.residualMeta.textContent = "Residual drift will appear after the next trained time model.";
+          dom.residualMeta.textContent = "Residual drift will appear after the next trained solar-clock model.";
         }
       }
 

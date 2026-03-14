@@ -27,10 +27,19 @@ LOGGER = logging.getLogger("solar.ml")
 
 
 PHASE_LABELS = ["Night", "Sunrise", "Day", "Sunset", "Anomaly"]
-FEATURE_COLUMNS = [
+TIME_FEATURE_COLUMNS = [
+    "raw_reference",
+    "smoothed_reference",
+    "rolling_std_1min",
+    "delta_v_5s",
+    "delta_v_30s",
+    "delta_v_5min",
+    "voltage_to_daily_max_ratio",
+]
+PHASE_FEATURE_COLUMNS = [
     "effective_voltage",
-    "hour",
-    "minute",
+    "raw_reference",
+    "smoothed_reference",
     "rolling_mean_5min",
     "rolling_std_1min",
     "delta_v_5s",
@@ -153,11 +162,9 @@ from(bucket: "{self.settings.influxdb_bucket}")
         prepared["rolling_std_1min"] = (
             prepared["effective_voltage"].rolling("1min", min_periods=2).std().fillna(0.0)
         )
-        prepared["hour"] = prepared.index.hour
-        prepared["minute"] = prepared.index.minute
         prepared["minute_of_day"] = (
-            prepared["hour"] * 60
-            + prepared["minute"]
+            prepared.index.hour * 60
+            + prepared.index.minute
             + (prepared.index.second / 60)
         )
         prepared["local_day"] = prepared.index.date
@@ -191,7 +198,7 @@ from(bucket: "{self.settings.influxdb_bucket}")
         prepared["time_to_sunset_minutes"] = night_targets
         prepared["time_to_sunrise_minutes"] = sunrise_phase_targets
 
-        for column in FEATURE_COLUMNS:
+        for column in set(TIME_FEATURE_COLUMNS + PHASE_FEATURE_COLUMNS):
             prepared[column] = prepared[column].replace([np.inf, -np.inf], np.nan).fillna(0.0)
         return prepared
 
@@ -276,7 +283,7 @@ from(bucket: "{self.settings.influxdb_bucket}")
         return delta_minutes
 
     def train_phase_classifier(self, prepared: pd.DataFrame) -> dict[str, Any]:
-        trainable = prepared.dropna(subset=FEATURE_COLUMNS + ["phase_label"]).copy()
+        trainable = prepared.dropna(subset=PHASE_FEATURE_COLUMNS + ["phase_label"]).copy()
         if len(trainable) < 80:
             return {
                 "available": False,
@@ -298,9 +305,9 @@ from(bucket: "{self.settings.influxdb_bucket}")
             random_state=42,
             n_jobs=1,
         )
-        model.fit(train_frame[FEATURE_COLUMNS], train_frame["phase_label"])
+        model.fit(train_frame[PHASE_FEATURE_COLUMNS], train_frame["phase_label"])
 
-        predictions = model.predict(test_frame[FEATURE_COLUMNS])
+        predictions = model.predict(test_frame[PHASE_FEATURE_COLUMNS])
         accuracy = float(accuracy_score(test_frame["phase_label"], predictions))
         model_path = self.model_dir / "phase_classifier.joblib"
         joblib.dump(model, model_path)
@@ -321,9 +328,10 @@ from(bucket: "{self.settings.influxdb_bucket}")
         target_column: str,
         model_name: str,
         allowed_phases: set[str],
+        feature_columns: list[str],
     ) -> dict[str, Any]:
         phase_mask = prepared["phase_label"].isin(allowed_phases)
-        trainable = prepared[phase_mask].dropna(subset=FEATURE_COLUMNS + [target_column]).copy()
+        trainable = prepared[phase_mask].dropna(subset=feature_columns + [target_column]).copy()
         if len(trainable) < 40:
             return {
                 "available": False,
@@ -340,9 +348,9 @@ from(bucket: "{self.settings.influxdb_bucket}")
         test_frame = trainable.iloc[split_index:]
 
         model = LinearRegression()
-        model.fit(train_frame[FEATURE_COLUMNS], train_frame[target_column])
+        model.fit(train_frame[feature_columns], train_frame[target_column])
 
-        predictions = model.predict(test_frame[FEATURE_COLUMNS])
+        predictions = model.predict(test_frame[feature_columns])
         mae = float(mean_absolute_error(test_frame[target_column], predictions))
         r2 = float(r2_score(test_frame[target_column], predictions)) if len(test_frame) > 1 else 0.0
 
@@ -414,13 +422,15 @@ from(bucket: "{self.settings.influxdb_bucket}")
 
     def build_insights(self, prepared: pd.DataFrame) -> dict[str, Any]:
         latest = prepared.iloc[-1]
-        latest_features = latest[FEATURE_COLUMNS].to_frame().T
+        latest_time_features = latest[TIME_FEATURE_COLUMNS].to_frame().T
+        latest_phase_features = latest[PHASE_FEATURE_COLUMNS].to_frame().T
 
         time_model = self.train_regressor(
             prepared,
             target_column="minute_of_day",
             model_name="time_of_day_model",
             allowed_phases={"Night", "Sunrise", "Day", "Sunset"},
+            feature_columns=TIME_FEATURE_COLUMNS,
         )
         phase_classifier = self.train_phase_classifier(prepared)
         sunset_model = self.train_regressor(
@@ -428,12 +438,14 @@ from(bucket: "{self.settings.influxdb_bucket}")
             target_column="time_to_sunset_minutes",
             model_name="time_to_sunset_model",
             allowed_phases={"Day", "Sunset"},
+            feature_columns=TIME_FEATURE_COLUMNS,
         )
         sunrise_model = self.train_regressor(
             prepared,
             target_column="time_to_sunrise_minutes",
             model_name="time_to_sunrise_model",
             allowed_phases={"Night", "Sunrise"},
+            feature_columns=TIME_FEATURE_COLUMNS,
         )
 
         ai_time_estimate = None
@@ -443,15 +455,15 @@ from(bucket: "{self.settings.influxdb_bucket}")
         sunrise_eta = None
 
         if time_model["available"]:
-            ai_time_estimate = float(time_model["model"].predict(latest_features)[0])
+            ai_time_estimate = float(time_model["model"].predict(latest_time_features)[0])
         if phase_classifier["available"]:
-            predicted_phase = str(phase_classifier["model"].predict(latest_features)[0])
-            probabilities = phase_classifier["model"].predict_proba(latest_features)[0]
+            predicted_phase = str(phase_classifier["model"].predict(latest_phase_features)[0])
+            probabilities = phase_classifier["model"].predict_proba(latest_phase_features)[0]
             phase_probability = float(np.max(probabilities))
         if sunset_model["available"] and predicted_phase in {"Day", "Sunset"}:
-            sunset_eta = float(sunset_model["model"].predict(latest_features)[0])
+            sunset_eta = float(sunset_model["model"].predict(latest_time_features)[0])
         if sunrise_model["available"] and predicted_phase in {"Night", "Sunrise"}:
-            sunrise_eta = float(sunrise_model["model"].predict(latest_features)[0])
+            sunrise_eta = float(sunrise_model["model"].predict(latest_time_features)[0])
 
         sunset_eta = self._sanitize_eta(sunset_eta)
         sunrise_eta = self._sanitize_eta(sunrise_eta)
@@ -481,6 +493,10 @@ from(bucket: "{self.settings.influxdb_bucket}")
                 "smoothed_voltage": round(float(latest["smoothed_reference"]), 6) if pd.notna(latest["smoothed_reference"]) else None,
             },
             "latest_features": {
+                "raw_voltage": round(float(latest["raw_reference"]), 6) if pd.notna(latest["raw_reference"]) else None,
+                "smoothed_voltage": (
+                    round(float(latest["smoothed_reference"]), 6) if pd.notna(latest["smoothed_reference"]) else None
+                ),
                 "rolling_std_1min": round(float(latest["rolling_std_1min"]), 6),
                 "delta_v_5s": round(float(latest["delta_v_5s"]), 6),
                 "delta_v_30s": round(float(latest["delta_v_30s"]), 6),

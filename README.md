@@ -11,7 +11,7 @@ The current repository state is a working MVP: the edge node samples ADS1115 vol
 - Edge-side batching that keeps local sampling at `1 Hz` while publishing 5-second aggregates to reduce Raspberry Pi and network load.
 - Time-series storage plan with `InfluxDB` as the default recommendation for a low-memory server.
 - Phase-aware online training service with feature engineering and two-stage models every 15 minutes.
-- AI Insights for time-of-day, sunset ETA, sunrise ETA, and confidence scoring.
+- AI Insights for a light-only solar clock, sunset ETA, sunrise ETA, bias tracking, and confidence scoring.
 - Command-center dashboard with live volatility, delta, residuals, percentiles, SNR, and uptime.
 - Lightweight FastAPI surface for history, live telemetry, AI insights, and analytics summaries.
 - Cloudflare Tunnel routing guidance that keeps the existing public site intact.
@@ -100,17 +100,19 @@ The frontend is a single-file dashboard that proxies API traffic through Nginx a
 - a daily voltage area chart
 - a 60-second live volatility oscilloscope
 - a delta-per-second chart
-- an AI residuals chart
+- an adaptive AI residuals chart
 - percentile, SNR, uptime, and confidence cards
-- an AI Insights panel for predicted local time, sunset ETA, sunrise ETA, and ML phase context
+- a bias card for the last-hour solar-clock drift
+- an AI Insights panel for a light-only solar-clock estimate, sunset ETA, sunrise ETA, and ML phase context
 
 The current ML stack includes:
 
 - a phase classifier for `Night`, `Sunrise`, `Day`, `Sunset`, and `Anomaly`
-- a time-of-day regressor for the AI clock estimate
+- a time-of-day regressor for the AI solar clock estimate
 - a day/sunset regressor for sunset ETA
 - a night/sunrise regressor for sunrise ETA
-- engineered features such as rolling standard deviation, multi-window deltas, and `voltage_to_daily_max_ratio`
+- engineered features such as raw voltage, smoothed voltage, rolling standard deviation, multi-window deltas, and `voltage_to_daily_max_ratio`
+- no `hour` or `minute` inputs for any live model, so the solar-clock estimate is driven purely by light behavior
 
 ## Development
 

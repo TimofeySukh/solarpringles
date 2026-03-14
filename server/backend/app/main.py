@@ -371,6 +371,8 @@ def build_stats(points: list[dict[str, Any]]) -> dict[str, Any]:
         "snr_db": snr_db,
         "uptime_seconds": latest_uptime,
         "sample_count_last_hour": len(points),
+        "bias_minutes_last_hour": None,
+        "bias_sample_count_last_hour": 0,
     }
 
 
@@ -378,6 +380,7 @@ def build_analytics_payload(
     recent_points: list[dict[str, Any]],
     latest_insights: dict[str, Any] | None,
 ) -> dict[str, Any]:
+    stats = build_stats(recent_points)
     if recent_points:
         latest_time = parse_iso_timestamp(recent_points[-1]["timestamp"])
         window_start = latest_time - timedelta(seconds=60)
@@ -399,11 +402,20 @@ def build_analytics_payload(
         for row in residual_history
         if row.get("residual_minutes") is not None
     ]
+    bias_window_start = utc_now() - timedelta(hours=1)
+    recent_residuals = [
+        float(row["residual_minutes"])
+        for row in residual_points
+        if parse_iso_timestamp(row["timestamp"]) >= bias_window_start
+    ]
+    if recent_residuals:
+        stats["bias_minutes_last_hour"] = round(sum(recent_residuals) / len(recent_residuals), 2)
+        stats["bias_sample_count_last_hour"] = len(recent_residuals)
 
     latest = recent_points[-1] if recent_points else None
     return {
         "timezone": SETTINGS.timezone_name,
-        "stats": build_stats(recent_points),
+        "stats": stats,
         "latest": latest,
         "condition": classify_status(effective_voltage(latest)) if latest else "No data",
         "volatility_window_seconds": 60,
