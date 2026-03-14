@@ -183,7 +183,14 @@ class MqttPublisher:
         LOGGER.info("Connected to MQTT broker at %s:%s", self.settings.mqtt_host, self.settings.mqtt_port)
         self.connected.set()
 
-    def on_disconnect(self, _client, _userdata, reason_code, _properties=None) -> None:
+    def on_disconnect(
+        self,
+        _client,
+        _userdata,
+        reason_code=None,
+        _properties=None,
+        *_extra,
+    ) -> None:
         self.connected.clear()
         if self.stop_requested.is_set():
             LOGGER.info("MQTT client disconnected")
