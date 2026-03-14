@@ -43,6 +43,8 @@ Use a simple moving average with a window size of `5` or `10` readings.
 Implemented default:
 
 - use `10` readings for stronger smoothing under noisy low-light conditions
+- keep local sampling at `1 Hz`
+- publish one aggregate MQTT packet every `5 seconds`
 
 ### Read Error Handling
 
@@ -69,8 +71,11 @@ Publish to:
 Recommended payload fields:
 
 - `timestamp`
-- `raw_voltage`
-- `smoothed_voltage`
+- `raw_voltage_last`
+- `smoothed_voltage_last`
+- `raw_min_5s`
+- `raw_max_5s`
+- `raw_mean_5s`
 - `sensor_id`
 - `uptime_seconds`
 
@@ -116,13 +121,17 @@ Behavior:
 - skips the failed iteration instead of crashing
 - computes a 10-sample simple moving average
 - publishes to MQTT using `paho-mqtt`
+- batches outbound MQTT payloads every `5 seconds`
 - writes every successful sample to `solar_backup.csv`
 - calls `flush()` after each backup row
 - is deployable under `systemd` with `edge/systemd/sollar-panel-edge.service`
 
 ## Suggested Data Semantics
 
-- `raw_voltage`: direct ADC-derived voltage before smoothing
-- `smoothed_voltage`: moving average used for display and simple heuristics
-- `timestamp`: UTC ISO 8601 timestamp generated at sample time
+- `raw_voltage_last`: most recent ADC-derived voltage inside the current 5-second publish window
+- `smoothed_voltage_last`: most recent moving-average value inside the current 5-second publish window
+- `raw_min_5s`: minimum raw voltage seen inside the current 5-second publish window
+- `raw_max_5s`: maximum raw voltage seen inside the current 5-second publish window
+- `raw_mean_5s`: mean raw voltage across the current 5-second publish window
+- `timestamp`: UTC ISO 8601 timestamp of the latest sample in the publish window
 - `uptime_seconds`: Raspberry Pi uptime reported from `/proc/uptime` for dashboard operations telemetry

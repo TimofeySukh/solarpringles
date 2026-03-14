@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from threading import Event, Lock
+from typing import Any
 
 import board
 import busio
@@ -41,12 +42,20 @@ def system_uptime_seconds() -> int | None:
 
 
 @dataclass(slots=True)
+class Sample:
+    timestamp: str
+    raw_voltage: float
+    smoothed_voltage: float
+
+
+@dataclass(slots=True)
 class Settings:
     sensor_id: str = os.getenv("SOLAR_SENSOR_ID", "pringles_1")
     mqtt_host: str = os.getenv("SOLAR_MQTT_HOST", "")
     mqtt_port: int = int(os.getenv("SOLAR_MQTT_PORT", "1884"))
     mqtt_topic: str = os.getenv("SOLAR_MQTT_TOPIC", "sensor/solar/voltage")
     sample_interval_seconds: float = float(os.getenv("SOLAR_SAMPLE_INTERVAL_SECONDS", "1.0"))
+    publish_interval_seconds: float = float(os.getenv("SOLAR_PUBLISH_INTERVAL_SECONDS", "5.0"))
     smoothing_window: int = int(os.getenv("SOLAR_SMOOTHING_WINDOW", "10"))
     backup_path: str = os.getenv("SOLAR_BACKUP_PATH", "/opt/sollar_panel/solar_backup.csv")
     ads_i2c_address: int = int(os.getenv("SOLAR_ADS_I2C_ADDRESS", "0x48"), 16)
@@ -59,6 +68,10 @@ class Settings:
             raise ValueError("SOLAR_SMOOTHING_WINDOW must be at least 1")
         if self.sample_interval_seconds <= 0:
             raise ValueError("SOLAR_SAMPLE_INTERVAL_SECONDS must be positive")
+        if self.publish_interval_seconds <= 0:
+            raise ValueError("SOLAR_PUBLISH_INTERVAL_SECONDS must be positive")
+        if self.publish_interval_seconds < self.sample_interval_seconds:
+            raise ValueError("SOLAR_PUBLISH_INTERVAL_SECONDS must be >= SOLAR_SAMPLE_INTERVAL_SECONDS")
 
 
 class BackupWriter:
@@ -109,7 +122,7 @@ class SensorReader:
                 LOGGER.warning("ADS1115 initialization failed: %s", exc)
                 time.sleep(2)
 
-    def read(self) -> tuple[float, float] | None:
+    def read(self) -> Sample | None:
         if self._chan is None:
             self._connect()
 
@@ -129,7 +142,11 @@ class SensorReader:
 
         self._samples.append(raw_voltage)
         smoothed_voltage = sum(self._samples) / len(self._samples)
-        return raw_voltage, smoothed_voltage
+        return Sample(
+            timestamp=utc_now_iso(),
+            raw_voltage=raw_voltage,
+            smoothed_voltage=smoothed_voltage,
+        )
 
 
 class MqttPublisher:
@@ -185,9 +202,10 @@ class MqttPublisher:
 
         if result.rc == mqtt.MQTT_ERR_SUCCESS:
             LOGGER.info(
-                "Published telemetry: raw_voltage=%s smoothed_voltage=%s",
-                payload["raw_voltage"],
-                payload["smoothed_voltage"],
+                "Published aggregate telemetry: raw_last=%s smoothed_last=%s raw_mean_5s=%s",
+                payload["raw_voltage_last"],
+                payload["smoothed_voltage_last"],
+                payload["raw_mean_5s"],
             )
             return
 
@@ -206,18 +224,34 @@ class SolarNode:
         self.sensor_reader = SensorReader(settings)
         self.mqtt_publisher = MqttPublisher(settings)
         self.backup_writer = BackupWriter(settings.backup_path)
+        self.publish_window: deque[Sample] = deque()
+        self._last_publish_monotonic = time.monotonic()
 
-    def _build_payload(self, raw_voltage: float, smoothed_voltage: float) -> dict[str, object]:
+    @staticmethod
+    def _build_payload(settings: Settings, samples: list[Sample]) -> dict[str, object]:
+        latest = samples[-1]
+        raw_values = [sample.raw_voltage for sample in samples]
         payload: dict[str, object] = {
-            "sensor_id": self.settings.sensor_id,
-            "timestamp": utc_now_iso(),
-            "raw_voltage": round(raw_voltage, 6),
-            "smoothed_voltage": round(smoothed_voltage, 6),
+            "sensor_id": settings.sensor_id,
+            "timestamp": latest.timestamp,
+            "raw_voltage_last": round(latest.raw_voltage, 6),
+            "smoothed_voltage_last": round(latest.smoothed_voltage, 6),
+            "raw_min_5s": round(min(raw_values), 6),
+            "raw_max_5s": round(max(raw_values), 6),
+            "raw_mean_5s": round(sum(raw_values) / len(raw_values), 6),
+            "sample_count_5s": len(samples),
         }
         uptime_seconds = system_uptime_seconds()
         if uptime_seconds is not None:
             payload["uptime_seconds"] = uptime_seconds
         return payload
+
+    def _drain_publish_window(self) -> dict[str, object] | None:
+        if not self.publish_window:
+            return None
+        samples = list(self.publish_window)
+        self.publish_window.clear()
+        return self._build_payload(self.settings, samples)
 
     def stop(self, *_args) -> None:
         LOGGER.info("Stop requested")
@@ -231,22 +265,30 @@ class SolarNode:
         try:
             while not self.stop_requested.is_set():
                 loop_started_at = time.monotonic()
-                reading = self.sensor_reader.read()
+                sample = self.sensor_reader.read()
 
-                if reading is not None:
-                    raw_voltage, smoothed_voltage = reading
-                    payload = self._build_payload(raw_voltage, smoothed_voltage)
+                if sample is not None:
                     self.backup_writer.write_row(
-                        payload["timestamp"],
-                        raw_voltage=raw_voltage,
-                        smoothed_voltage=smoothed_voltage,
+                        sample.timestamp,
+                        raw_voltage=sample.raw_voltage,
+                        smoothed_voltage=sample.smoothed_voltage,
                     )
-                    self.mqtt_publisher.publish(payload)
+                    self.publish_window.append(sample)
+
+                if loop_started_at - self._last_publish_monotonic >= self.settings.publish_interval_seconds:
+                    payload = self._drain_publish_window()
+                    self._last_publish_monotonic = loop_started_at
+                    if payload is not None:
+                        self.mqtt_publisher.publish(payload)
 
                 elapsed = time.monotonic() - loop_started_at
                 sleep_for = max(0.0, self.settings.sample_interval_seconds - elapsed)
                 self.stop_requested.wait(sleep_for)
         finally:
+            if self.publish_window:
+                payload = self._drain_publish_window()
+                if payload is not None:
+                    self.mqtt_publisher.publish(payload)
             self.mqtt_publisher.stop()
             self.backup_writer.close()
 

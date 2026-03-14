@@ -81,8 +81,9 @@ The ingestion worker must:
 
 - subscribe to `sensor/solar/voltage`
 - validate incoming payloads
-- write `raw_voltage` to the time-series database as the canonical stored signal
-- optionally store `smoothed_voltage` as a secondary field for UI convenience
+- map `raw_voltage_last` into the canonical `raw_voltage` field for compatibility
+- map `smoothed_voltage_last` into the canonical `smoothed_voltage` field for compatibility
+- persist the 5-second aggregate fields for analytics and ML feature engineering
 - handle reconnects to both MQTT and the database without process crashes
 
 ### Reliability Requirements
@@ -110,6 +111,12 @@ Initial fields:
 
 - `raw_voltage`
 - `smoothed_voltage` when present
+- `raw_voltage_last`
+- `smoothed_voltage_last`
+- `raw_min_5s`
+- `raw_max_5s`
+- `raw_mean_5s`
+- `sample_count_5s`
 - `uptime_seconds` when present
 
 The timestamp comes from the payload when available and falls back to current UTC when missing or invalid.
@@ -127,11 +134,15 @@ The first feature set should include:
 
 The current `ml_engine` implementation computes:
 
-- `hour`
-- `minute`
-- `volt_velocity`
 - `rolling_mean_5min`
+- `rolling_std_1min`
+- `delta_v_5s`
+- `delta_v_30s`
+- `delta_v_5min`
+- `voltage_to_daily_max_ratio`
+- `raw_window_range_5s`
 - `effective_voltage` as the base training signal
+- clock features such as `hour` and `minute`
 
 Training cadence:
 
@@ -139,13 +150,15 @@ Training cadence:
 
 Current model choices:
 
-- lightweight `LinearRegression` models to respect the small memory budget
+- lightweight `RandomForestClassifier` for phase detection
+- lightweight `LinearRegression` regressors for time estimation
 
 Current targets:
 
+- phase classification: `Night`, `Sunrise`, `Day`, `Sunset`, `Anomaly`
 - local time-of-day estimate
-- `time_to_sunset`
-- `time_to_sunrise`
+- `time_to_sunset` for `Day` and `Sunset`
+- `time_to_sunrise` for `Night` and `Sunrise`
 
 Model artifacts and latest insight snapshots are written into a shared `/models` volume.
 
@@ -207,7 +220,7 @@ The current scaffold now includes:
 
 `/api/insights` serves the latest ML snapshot written by `ml_engine`.
 
-`/api/analytics` returns last-hour percentiles, SNR, Raspberry Pi uptime, a 60-second raw-voltage window, delta-per-second points, and recent AI residual history.
+`/api/analytics` returns last-hour percentiles, SNR, Raspberry Pi uptime, a rolling raw-voltage window, delta-per-second points, recent AI residual history, latest engineered features, and phase prediction output.
 
 ### Timezone Handling
 
@@ -246,7 +259,7 @@ It includes:
 - an AI residuals chart fed from recent model snapshots
 - current voltage, percentile, SNR, uptime, and confidence cards
 - a live connection state indicator
-- a heuristic condition badge based on voltage thresholds
+- a phase-aware status badge fed by the latest ML snapshot when available
 - an AI Insights panel for predicted local time, sunset ETA, sunrise ETA, and confidence level
 
 Suggested status labels:

@@ -79,9 +79,9 @@ class InfluxWriter:
     def write(self, payload: dict[str, Any]) -> None:
         self.ensure_ready()
 
-        raw_voltage = payload.get("raw_voltage")
-        if raw_voltage is None:
-            raise ValueError("Payload is missing required field 'raw_voltage'")
+        raw_voltage_last = payload.get("raw_voltage_last", payload.get("raw_voltage"))
+        if raw_voltage_last is None:
+            raise ValueError("Payload is missing required field 'raw_voltage_last'")
 
         sensor_id = str(payload.get("sensor_id") or self.settings.default_sensor_id)
         timestamp = parse_timestamp(payload.get("timestamp"))
@@ -89,13 +89,23 @@ class InfluxWriter:
         point = (
             Point(self.settings.influxdb_measurement)
             .tag("sensor_id", sensor_id)
-            .field("raw_voltage", float(raw_voltage))
+            .field("raw_voltage", float(raw_voltage_last))
+            .field("raw_voltage_last", float(raw_voltage_last))
             .time(timestamp, WritePrecision.NS)
         )
 
-        smoothed_voltage = payload.get("smoothed_voltage")
-        if smoothed_voltage is not None:
-            point.field("smoothed_voltage", float(smoothed_voltage))
+        smoothed_voltage_last = payload.get("smoothed_voltage_last", payload.get("smoothed_voltage"))
+        if smoothed_voltage_last is not None:
+            point.field("smoothed_voltage", float(smoothed_voltage_last))
+            point.field("smoothed_voltage_last", float(smoothed_voltage_last))
+
+        for field_name in ("raw_min_5s", "raw_max_5s", "raw_mean_5s"):
+            if payload.get(field_name) is not None:
+                point.field(field_name, float(payload[field_name]))
+
+        sample_count_5s = payload.get("sample_count_5s")
+        if sample_count_5s is not None:
+            point.field("sample_count_5s", int(sample_count_5s))
 
         uptime_seconds = payload.get("uptime_seconds")
         if uptime_seconds is not None:
@@ -198,10 +208,11 @@ class SolarIngestionWorker:
             return
 
         LOGGER.info(
-            "Stored telemetry point: sensor_id=%s raw_voltage=%s smoothed_voltage=%s",
+            "Stored telemetry point: sensor_id=%s raw_last=%s smoothed_last=%s raw_mean_5s=%s",
             payload.get("sensor_id") or self.settings.default_sensor_id,
-            payload.get("raw_voltage"),
-            payload.get("smoothed_voltage"),
+            payload.get("raw_voltage_last", payload.get("raw_voltage")),
+            payload.get("smoothed_voltage_last", payload.get("smoothed_voltage")),
+            payload.get("raw_mean_5s"),
         )
 
     def run(self) -> None:

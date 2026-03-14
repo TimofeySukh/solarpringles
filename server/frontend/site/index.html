@@ -170,12 +170,29 @@
         color: var(--voltage);
       }
 
+      .status-day {
+        color: var(--voltage);
+      }
+
       .status-cloudy {
         color: var(--prediction);
       }
 
+      .status-night {
+        color: var(--prediction);
+      }
+
+      .status-sunrise,
+      .status-sunset {
+        color: var(--anomaly);
+      }
+
       .status-twilight {
         color: var(--anomaly);
+      }
+
+      .status-anomaly {
+        color: var(--danger);
       }
 
       .status-shade,
@@ -851,13 +868,18 @@
       }
 
       function updateStatus(point, explicitStatus) {
-        const effectiveVoltage = point ? point.smoothed_voltage ?? point.raw_voltage : null;
+        const effectiveVoltage = point
+          ? point.smoothed_voltage_last ?? point.smoothed_voltage ?? point.raw_mean_5s ?? point.raw_voltage_last ?? point.raw_voltage
+          : null;
         const status = explicitStatus || classifyStatus(effectiveVoltage);
+        const rawLast = point?.raw_voltage_last ?? point?.raw_voltage;
+        const smoothedLast = point?.smoothed_voltage_last ?? point?.smoothed_voltage;
+        const rawMean5s = point?.raw_mean_5s;
         dom.statusLabel.textContent = status;
         dom.statusPill.className = `status-pill ${statusClass(status)}`;
         dom.currentVoltage.textContent = point ? formatVoltageValue(effectiveVoltage) : "--.-- V";
         dom.currentVoltageMeta.textContent = point
-          ? `Raw ${point.raw_voltage?.toFixed(3) ?? "--.--"} V, smoothed ${point.smoothed_voltage?.toFixed(3) ?? "--.--"} V`
+          ? `Raw last ${rawLast?.toFixed(3) ?? "--.--"} V, smoothed last ${smoothedLast?.toFixed(3) ?? "--.--"} V, 5 s mean ${rawMean5s?.toFixed(3) ?? "--.--"} V`
           : "Waiting for the latest point from InfluxDB.";
         dom.lastUpdate.textContent = point
           ? `Last sample ${formatClock(point.timestamp_local ?? point.timestamp)} Copenhagen time`
@@ -902,7 +924,7 @@
         updateDeltaChart(analytics.delta_points);
         updateResidualChart(analytics.ai_residuals);
         if (analytics.latest) {
-          updateStatus(analytics.latest, analytics.condition);
+          updateStatus(analytics.latest, analytics.phase_prediction?.predicted_phase || analytics.condition);
         }
       }
 
@@ -935,7 +957,7 @@
           : "Sunrise ETA is warming up.";
         dom.confidenceValue.textContent = insights.confidence_level || "Unavailable";
         dom.confidenceMeta.textContent = insights.latest_point
-          ? `Latest model snapshot at ${formatDateTime(insights.latest_point.timestamp_local || insights.latest_point.timestamp)}.`
+          ? `Phase ${insights.phase_classifier?.predicted_phase || "Unavailable"} at ${formatDateTime(insights.latest_point.timestamp_local || insights.latest_point.timestamp)}.`
           : "Confidence is derived from holdout error.";
 
         if (insights.residual_minutes !== null && insights.residual_minutes !== undefined) {
@@ -980,7 +1002,7 @@
 
         updateVolatilityChart(state.livePoints);
         updateDeltaChart(deltaPoints);
-        updateStatus(point, point.condition);
+        updateStatus(point, point.predicted_phase || point.condition);
       }
 
       async function loadHistory() {

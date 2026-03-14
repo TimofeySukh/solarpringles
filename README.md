@@ -1,15 +1,16 @@
 # Sollar Panel
 
-Sollar Panel is an end-to-end IoT and machine learning pipeline that starts on a Raspberry Pi Zero 2 W and ends with a containerized backend, live command-center dashboard, and online-training loop for solar telemetry analysis.
+Sollar Panel is an end-to-end IoT and machine learning pipeline that starts on a Raspberry Pi Zero 2 W and ends with a containerized backend, live command-center dashboard, and a phase-aware online-training loop for solar telemetry analysis.
 
-The current repository state is a working MVP: the edge node samples ADS1115 voltage data, the server stores telemetry in InfluxDB, the ML engine trains lightweight models every 15 minutes, and the frontend renders a real-time analytical deck.
+The current repository state is a working MVP: the edge node samples ADS1115 voltage data at `1 Hz`, batches MQTT publishes every `5 seconds`, the server stores telemetry in InfluxDB, the ML engine trains a two-stage phase-plus-regression stack every 15 minutes, and the frontend renders a real-time analytical deck.
 
 ## Features
 
 - Resilient Raspberry Pi edge acquisition for ADS1115 over I2C.
 - MQTT-based ingestion with reconnect-safe behavior for unstable Wi-Fi and flaky sensor wiring.
+- Edge-side batching that keeps local sampling at `1 Hz` while publishing 5-second aggregates to reduce Raspberry Pi and network load.
 - Time-series storage plan with `InfluxDB` as the default recommendation for a low-memory server.
-- Online training service for lightweight solar models every 15 minutes.
+- Phase-aware online training service with feature engineering and two-stage models every 15 minutes.
 - AI Insights for time-of-day, sunset ETA, sunrise ETA, and confidence scoring.
 - Command-center dashboard with live volatility, delta, residuals, percentiles, SNR, and uptime.
 - Lightweight FastAPI surface for history, live telemetry, AI insights, and analytics summaries.
@@ -49,6 +50,12 @@ python3 -m pip install -r edge/requirements.txt
 python3 edge/solar_node.py
 ```
 
+The default edge runtime behavior is:
+
+- sample ADS1115 once per second
+- append every successful sample to the local CSV backup
+- publish one aggregate MQTT packet every `5 seconds`
+
 ## Configuration
 
 The runtime stack is:
@@ -85,7 +92,7 @@ The backend now exposes:
 - `GET /api/history` for aggregated day data
 - `GET /api/live` as an SSE stream for real-time telemetry
 - `GET /api/insights` for online-training output and confidence scores
-- `GET /api/analytics` for last-hour percentiles, SNR, uptime, live volatility, delta, and residual series
+- `GET /api/analytics` for last-hour percentiles, SNR, uptime, live volatility, delta, residual series, latest engineered features, and phase prediction
 - `GET /api/status` for a compact runtime summary
 
 The frontend is a single-file dashboard that proxies API traffic through Nginx and renders:
@@ -95,7 +102,15 @@ The frontend is a single-file dashboard that proxies API traffic through Nginx a
 - a delta-per-second chart
 - an AI residuals chart
 - percentile, SNR, uptime, and confidence cards
-- an AI Insights panel for predicted local time, sunset ETA, and sunrise ETA
+- an AI Insights panel for predicted local time, sunset ETA, sunrise ETA, and ML phase context
+
+The current ML stack includes:
+
+- a phase classifier for `Night`, `Sunrise`, `Day`, `Sunset`, and `Anomaly`
+- a time-of-day regressor for the AI clock estimate
+- a day/sunset regressor for sunset ETA
+- a night/sunrise regressor for sunrise ETA
+- engineered features such as rolling standard deviation, multi-window deltas, and `voltage_to_daily_max_ratio`
 
 ## Development
 

@@ -65,7 +65,7 @@ class InfluxRepository:
 
         aggregate_fragment = ""
         if every_minutes is not None:
-            aggregate_fragment = f'\n  |> aggregateWindow(every: {every_minutes}m, fn: mean, createEmpty: false)'
+            aggregate_fragment = f"\n  |> aggregateWindow(every: {every_minutes}m, fn: mean, createEmpty: false)"
 
         query = f"""
 from(bucket: "{self.settings.influxdb_bucket}")
@@ -73,7 +73,21 @@ from(bucket: "{self.settings.influxdb_bucket}")
   |> filter(fn: (r) => r["_measurement"] == "{self.settings.influxdb_measurement}")
   |> filter(fn: (r) => r["sensor_id"] == "{sensor_id}"){aggregate_fragment}
   |> pivot(rowKey: ["_time"], columnKey: ["_field"], valueColumn: "_value")
-  |> keep(columns: ["_time", "sensor_id", "raw_voltage", "smoothed_voltage", "uptime_seconds"])
+  |> keep(
+    columns: [
+      "_time",
+      "sensor_id",
+      "raw_voltage",
+      "raw_voltage_last",
+      "smoothed_voltage",
+      "smoothed_voltage_last",
+      "raw_min_5s",
+      "raw_max_5s",
+      "raw_mean_5s",
+      "sample_count_5s",
+      "uptime_seconds"
+    ]
+  )
   |> sort(columns: ["_time"])
 """
         tables = self.query_api.query(query)
@@ -84,20 +98,31 @@ from(bucket: "{self.settings.influxdb_bucket}")
 
     @staticmethod
     def _row_to_point(record: Any) -> dict[str, Any]:
-        raw_voltage = record.values.get("raw_voltage")
-        smoothed_voltage = record.values.get("smoothed_voltage")
-        uptime_seconds = record.values.get("uptime_seconds")
         recorded_at = record.get_time()
         recorded_at_utc = recorded_at.astimezone(UTC)
         recorded_at_local = recorded_at_utc.astimezone(LOCAL_TIMEZONE)
+
+        def read_float(field_name: str) -> float | None:
+            value = record.values.get(field_name)
+            return float(value) if value is not None else None
+
+        def read_int(field_name: str) -> int | None:
+            value = record.values.get(field_name)
+            return int(value) if value is not None else None
 
         return {
             "timestamp": recorded_at_utc.isoformat().replace("+00:00", "Z"),
             "timestamp_local": recorded_at_local.isoformat(),
             "sensor_id": record.values.get("sensor_id"),
-            "raw_voltage": float(raw_voltage) if raw_voltage is not None else None,
-            "smoothed_voltage": float(smoothed_voltage) if smoothed_voltage is not None else None,
-            "uptime_seconds": int(uptime_seconds) if uptime_seconds is not None else None,
+            "raw_voltage": read_float("raw_voltage"),
+            "raw_voltage_last": read_float("raw_voltage_last"),
+            "smoothed_voltage": read_float("smoothed_voltage"),
+            "smoothed_voltage_last": read_float("smoothed_voltage_last"),
+            "raw_min_5s": read_float("raw_min_5s"),
+            "raw_max_5s": read_float("raw_max_5s"),
+            "raw_mean_5s": read_float("raw_mean_5s"),
+            "sample_count_5s": read_int("sample_count_5s"),
+            "uptime_seconds": read_int("uptime_seconds"),
         }
 
     def fetch_latest(self, sensor_id: str) -> dict[str, Any] | None:
@@ -118,7 +143,7 @@ from(bucket: "{self.settings.influxdb_bucket}")
         return self._query_points(sensor_id, start=utc_now() - lookback)
 
 
-app = FastAPI(title=SETTINGS.api_title, version="0.3.0")
+app = FastAPI(title=SETTINGS.api_title, version="0.4.0")
 app.state.settings = SETTINGS
 app.state.influx = None
 
@@ -177,8 +202,24 @@ def read_insights_history(limit: int = 96) -> list[dict[str, Any]]:
     return rows[-limit:]
 
 
-def effective_voltage(point: dict[str, Any]) -> float | None:
-    return point.get("smoothed_voltage") if point.get("smoothed_voltage") is not None else point.get("raw_voltage")
+def effective_voltage(point: dict[str, Any] | None) -> float | None:
+    if point is None:
+        return None
+    for field_name in ("smoothed_voltage_last", "smoothed_voltage", "raw_mean_5s", "raw_voltage_last", "raw_voltage"):
+        value = point.get(field_name)
+        if value is not None:
+            return float(value)
+    return None
+
+
+def raw_signal_value(point: dict[str, Any] | None) -> float | None:
+    if point is None:
+        return None
+    for field_name in ("raw_voltage_last", "raw_voltage", "raw_mean_5s"):
+        value = point.get(field_name)
+        if value is not None:
+            return float(value)
+    return None
 
 
 def classify_status(voltage: float | None) -> str:
@@ -217,6 +258,13 @@ def percentile(values: list[float], ratio: float) -> float | None:
     return float(lower_value + (upper_value - lower_value) * fraction)
 
 
+def nearest_historical_voltage(points: list[dict[str, Any]], target_time: datetime) -> float | None:
+    for point in reversed(points):
+        if parse_iso_timestamp(point["timestamp"]) <= target_time:
+            return effective_voltage(point)
+    return None
+
+
 def build_delta_series(points: list[dict[str, Any]]) -> list[dict[str, Any]]:
     if not points:
         return []
@@ -225,10 +273,10 @@ def build_delta_series(points: list[dict[str, Any]]) -> list[dict[str, Any]]:
     previous_point: dict[str, Any] | None = None
     for point in points:
         delta_value = 0.0
-        if previous_point is not None:
-            current_voltage = point.get("raw_voltage")
-            previous_voltage = previous_point.get("raw_voltage")
-            if current_voltage is not None and previous_voltage is not None:
+        current_voltage = raw_signal_value(point)
+        if previous_point is not None and current_voltage is not None:
+            previous_voltage = raw_signal_value(previous_point)
+            if previous_voltage is not None:
                 delta_seconds = (
                     parse_iso_timestamp(point["timestamp"]) - parse_iso_timestamp(previous_point["timestamp"])
                 ).total_seconds()
@@ -246,11 +294,65 @@ def build_delta_series(points: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return delta_series
 
 
+def build_feature_snapshot(points: list[dict[str, Any]]) -> dict[str, Any] | None:
+    if not points:
+        return None
+
+    latest = points[-1]
+    latest_time = parse_iso_timestamp(latest["timestamp"])
+    latest_voltage = effective_voltage(latest)
+    if latest_voltage is None:
+        return None
+
+    one_minute_points = [
+        effective_voltage(point)
+        for point in points
+        if parse_iso_timestamp(point["timestamp"]) >= latest_time - timedelta(minutes=1)
+        and effective_voltage(point) is not None
+    ]
+    one_minute_std = None
+    if len(one_minute_points) > 1:
+        mean_value = sum(one_minute_points) / len(one_minute_points)
+        variance = sum((value - mean_value) ** 2 for value in one_minute_points) / len(one_minute_points)
+        one_minute_std = math.sqrt(variance)
+
+    daily_points = [
+        effective_voltage(point)
+        for point in points
+        if parse_iso_timestamp(point["timestamp"]).astimezone(LOCAL_TIMEZONE).date()
+        == latest_time.astimezone(LOCAL_TIMEZONE).date()
+        and effective_voltage(point) is not None
+    ]
+    daily_max = max(daily_points) if daily_points else None
+
+    return {
+        "rolling_std_1min": round(one_minute_std, 6) if one_minute_std is not None else None,
+        "delta_v_5s": round(
+            latest_voltage - (nearest_historical_voltage(points, latest_time - timedelta(seconds=5)) or latest_voltage),
+            6,
+        ),
+        "delta_v_30s": round(
+            latest_voltage - (nearest_historical_voltage(points, latest_time - timedelta(seconds=30)) or latest_voltage),
+            6,
+        ),
+        "delta_v_5min": round(
+            latest_voltage - (nearest_historical_voltage(points, latest_time - timedelta(minutes=5)) or latest_voltage),
+            6,
+        ),
+        "voltage_to_daily_max_ratio": (
+            round(latest_voltage / daily_max, 6) if daily_max not in {None, 0} else None
+        ),
+    }
+
+
 def build_stats(points: list[dict[str, Any]]) -> dict[str, Any]:
     effective_values = [effective_voltage(point) for point in points if effective_voltage(point) is not None]
-    raw_values = [point["raw_voltage"] for point in points if point.get("raw_voltage") is not None]
-    smoothed_values = [point["smoothed_voltage"] for point in points if point.get("smoothed_voltage") is not None]
-    latest_uptime = next((point["uptime_seconds"] for point in reversed(points) if point.get("uptime_seconds") is not None), None)
+    raw_values = [raw_signal_value(point) for point in points if raw_signal_value(point) is not None]
+    smoothed_values = [effective_voltage(point) for point in points if effective_voltage(point) is not None]
+    latest_uptime = next(
+        (point["uptime_seconds"] for point in reversed(points) if point.get("uptime_seconds") is not None),
+        None,
+    )
 
     signal_rms = None
     noise_rms = None
@@ -292,6 +394,7 @@ def build_analytics_payload(
             "timestamp_local": row["trained_at_local"],
             "residual_minutes": row.get("residual_minutes"),
             "confidence_level": row.get("confidence_level"),
+            "predicted_phase": row.get("predicted_phase"),
         }
         for row in residual_history
         if row.get("residual_minutes") is not None
@@ -307,6 +410,16 @@ def build_analytics_payload(
         "volatility_points": live_window,
         "delta_points": build_delta_series(live_window),
         "ai_residuals": residual_points,
+        "latest_features": (
+            latest_insights.get("latest_features")
+            if latest_insights and latest_insights.get("latest_features")
+            else build_feature_snapshot(recent_points)
+        ),
+        "phase_prediction": (
+            latest_insights.get("phase_classifier")
+            if latest_insights and latest_insights.get("phase_classifier")
+            else None
+        ),
         "latest_insights_available": bool(latest_insights and latest_insights.get("available")),
     }
 
@@ -324,6 +437,7 @@ async def api_status(request: Request, sensor_id: str | None = None) -> dict[str
     repository = get_repository(request)
     parsed_sensor_id = parse_sensor_id(sensor_id)
     latest = await asyncio.to_thread(repository.fetch_latest, parsed_sensor_id)
+    insights = read_latest_insights()
     return {
         "status": "ok",
         "sensor_id": parsed_sensor_id,
@@ -333,6 +447,7 @@ async def api_status(request: Request, sensor_id: str | None = None) -> dict[str
         "timezone": SETTINGS.timezone_name,
         "latest": latest,
         "condition": classify_status(effective_voltage(latest)) if latest else "No data",
+        "phase_prediction": insights.get("phase_classifier") if insights else None,
     }
 
 
@@ -421,6 +536,10 @@ async def api_live(request: Request, sensor_id: str | None = None) -> StreamingR
             if latest is not None and latest["timestamp"] != last_timestamp:
                 last_timestamp = latest["timestamp"]
                 latest["condition"] = classify_status(effective_voltage(latest))
+                insights = read_latest_insights()
+                if insights is not None:
+                    latest["predicted_phase"] = insights.get("phase_classifier", {}).get("predicted_phase")
+                    latest["phase_confidence"] = insights.get("phase_classifier", {}).get("confidence")
                 yield format_sse("telemetry", latest)
             else:
                 yield format_sse(
