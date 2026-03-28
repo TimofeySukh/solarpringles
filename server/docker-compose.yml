@@ -59,6 +59,28 @@ services:
     networks:
       - solar-net
 
+  fake_edge:
+    build:
+      context: ./fake_edge
+    container_name: solar-fake-edge
+    restart: unless-stopped
+    profiles: ["fake"]
+    depends_on:
+      - mosquitto
+    environment:
+      TZ: Europe/Copenhagen
+      MQTT_HOST: mosquitto
+      MQTT_PORT: 1883
+      MQTT_TOPIC: ${MQTT_TOPIC}
+      MQTT_USERNAME: ${MQTT_USERNAME}
+      MQTT_PASSWORD: ${MQTT_PASSWORD}
+      FAKE_SENSOR_ID: ${INFLUXDB_SENSOR_ID}
+      FAKE_VOLTAGE: ${FAKE_VOLTAGE:-0.476}
+      FAKE_PUBLISH_INTERVAL_SECONDS: ${FAKE_PUBLISH_INTERVAL_SECONDS:-1.0}
+      FAKE_SAMPLE_COUNT: ${FAKE_SAMPLE_COUNT:-5}
+    networks:
+      - solar-net
+
   backend:
     build:
       context: ./backend
