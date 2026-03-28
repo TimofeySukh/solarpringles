@@ -2,7 +2,7 @@
 
 ## Purpose
 
-This project is an end-to-end IoT telemetry and machine learning preparation pipeline for a small solar panel connected to a Raspberry Pi Zero 2 W.
+This project is an end-to-end IoT telemetry and machine learning preparation pipeline for a small solar panel node.
 
 The short-term goal is reliable data collection, storage, visualization, and export.
 
@@ -12,10 +12,10 @@ The medium-term goal is to build a high-quality dataset that can support future 
 
 The full system has two major parts:
 
-- an edge collector running on the Raspberry Pi
+- an edge collector running on an ESP32
 - a server-side stack running on a Linux home server
 
-The edge collector reads a low-voltage analog signal through an ADS1115 ADC, smooths noisy readings, stores a local CSV backup, and publishes telemetry over MQTT.
+The edge collector reads a low-voltage analog signal through the ESP32 ADC on `GPIO34`, reads `DHT11` temperature and humidity on `GPIO4`, keeps an OLED status display alive over I2C on `GPIO18`/`GPIO19`, smooths noisy readings, and publishes telemetry over MQTT.
 
 The server receives telemetry, stores the raw signal in a time-series database, computes derived features, exposes historical and live data to a web UI, and exports daily training datasets for notebooks.
 
@@ -24,7 +24,9 @@ The server receives telemetry, stores the raw signal in a time-series database, 
 ### Hardware and Signal Constraints
 
 - The solar panel output is expected in the `0.0 V` to `0.5 V` range on the current hardware description.
-- The ADS1115 is connected over I2C at address `0x48`.
+- The active edge baseline uses the ESP32 ADC on `GPIO34`.
+- The OLED display uses I2C address `0x3C` on `GPIO18` and `GPIO19`.
+- A `DHT11` climate sensor is attached to `GPIO4`.
 - The physical wiring is unstable and may produce very short disconnects.
 - Low-light conditions produce significant noise and require smoothing.
 
@@ -38,11 +40,17 @@ The server receives telemetry, stores the raw signal in a time-series database, 
 
 ### Edge Side
 
-- Python 3 acquisition loop
-- `adafruit-circuitpython-ads1x15`
-- `paho-mqtt`
-- local CSV append-only backup
+- Arduino / PlatformIO acquisition loop
+- `PubSubClient`
+- `Adafruit SSD1306`
+- `DHT sensor library`
 - MQTT publish every second
+
+Legacy reference path:
+
+- Python 3 acquisition loop on Raspberry Pi Zero 2 W
+- ADS1115 over I2C
+- local CSV append-only backup
 
 ### Server Side
 
@@ -58,13 +66,17 @@ The server receives telemetry, stores the raw signal in a time-series database, 
 The requirements mention both smoothed publishing and raw-value storage. To avoid losing training-quality data, the recommended payload contract is:
 
 - `timestamp`
+- `adc_raw`
 - `raw_voltage`
 - `smoothed_voltage`
+- `temperature_c`
+- `humidity_pct`
 
 This resolves the requirement conflict cleanly:
 
 - `raw_voltage` remains the canonical series for storage and ML
 - `smoothed_voltage` is available for UI display and simple heuristics
+- climate fields are available for future feature engineering without changing the main solar contract
 
 ## Delivery Priorities
 

@@ -2,39 +2,58 @@
 
 ## Target Hardware
 
-- Device: Raspberry Pi Zero 2 W
-- OS: Debian or Raspberry Pi OS
-- ADC: ADS1115 on I2C address `0x48`
-- Sensor input: small solar panel connected to ADS1115 `A0`
+- Device baseline: ESP32
+- Solar input: small solar panel connected to `GPIO34`
+- Climate sensor: `DHT11` on `GPIO4`
+- OLED display: SSD1306 at `0x3C`
+- OLED I2C pins:
+  - `SDA`: `GPIO18`
+  - `SCL`: `GPIO19`
+
+Legacy reference hardware:
+
+- Raspberry Pi Zero 2 W
+- ADS1115 on I2C address `0x48`
+- solar panel on ADS1115 `A0`
 
 ## Electrical and Reliability Constraints
 
 - The current assembly is mechanically unstable and may produce sub-second disconnects.
-- The software must tolerate intermittent read errors without crashing.
-- Data loss during power loss should be minimized by flushing the local CSV file after each write.
+- Wi-Fi availability can fluctuate and must not stall the sampling loop.
+- The OLED display must keep refreshing even if network or DHT reads fail.
+- Flash-heavy per-sample persistence is a poor fit for an ESP32 and should be avoided.
 
-## Required Python Stack
+## Required ESP32 Stack
 
-- Python 3
-- `adafruit-circuitpython-ads1x15`
-- `paho-mqtt`
-- standard-library modules: `csv`, `time`, `datetime`
+- PlatformIO
+- Arduino framework for ESP32
+- `PubSubClient`
+- `Adafruit SSD1306`
+- `Adafruit GFX`
+- `DHT sensor library`
+- `ArduinoJson`
 
 ## Initialization Requirements
 
-The I2C bus setup and ADS1115 initialization must use retry logic in an infinite loop until the device becomes available.
+The ESP32 edge firmware must initialize these subsystems independently:
 
-Required ADS1115 settings:
+- Wi-Fi
+- NTP time sync
+- MQTT
+- OLED display
+- DHT11
+- ADC on `GPIO34`
 
-- initialize the channel with `AnalogIn(ads, 0)`
-- do not use `ADS.P0`
-- set `ads.gain = 4` to cover up to `1.024 V`
+Display initialization must be retry-safe so the screen can recover even if I2C glitches during boot.
 
 ## Sampling Pipeline
 
 ### Frequency
 
 - sample five times per second
+- publish one aggregate MQTT packet every second
+- refresh the OLED every second
+- read DHT11 no faster than every three seconds
 
 ### Filtering
 
@@ -48,19 +67,12 @@ Implemented default:
 
 ### Read Error Handling
 
-Every `chan.voltage` read must be wrapped in `try/except`.
+Required behavior on edge-side failures:
 
-The script must explicitly tolerate:
-
-- `OSError: [Errno 121] Remote I/O error`
-- `OSError: [Errno 5] Input/output error`
-
-Required behavior on read failure:
-
-- log the error
-- sleep for `0.5` seconds
-- continue the main loop
-- do not terminate the process
+- ADC reads must not block Wi-Fi, MQTT, or display refresh.
+- DHT11 read failures must keep the main loop alive.
+- MQTT disconnects must trigger reconnect attempts without halting sampling.
+- OLED failures must trigger periodic re-initialization attempts instead of a hard stop.
 
 ## MQTT Publishing Requirements
 
@@ -71,11 +83,15 @@ Publish to:
 Recommended payload fields:
 
 - `timestamp`
+- `adc_raw`
 - `raw_voltage`
 - `smoothed_voltage`
 - `min_v`
 - `max_v`
 - `mean_v`
+- `temperature_c`
+- `humidity_pct`
+- `sample_count`
 - `sensor_id`
 - `uptime_seconds`
 
@@ -85,54 +101,56 @@ MQTT behavior requirements:
 - loss of broker connectivity or Wi-Fi must not crash the script
 - use non-blocking publish or connection-safe exception handling
 
-## Local Backup Requirements
+## Local State Requirements
 
-Append every sampled row to `solar_log.csv` with these columns:
+The ESP32 migration intentionally avoids per-sample persistent CSV logging on internal flash.
 
-- `timestamp`
-- `raw_voltage`
-- `smoothed_voltage`
+Reason:
 
-After each write:
+- constant flash writes at `5 Hz` are not a good durability tradeoff on a microcontroller
 
-- call `file.flush()`
+The firmware should instead keep:
 
-This is mandatory to reduce buffered data loss during sudden power removal.
+- a live smoothing window in RAM
+- a one-second publish aggregate in RAM
+- retry-safe Wi-Fi and MQTT reconnect behavior
 
 ## Implementation Notes
 
-The edge process should be treated as a long-running service with defensive behavior:
+The edge firmware should be treated as a long-running live device:
 
-- retry hardware initialization forever
-- never fail hard on transient ADC read errors
-- continue sampling during MQTT outages
-- keep a local CSV trail even when the network path is unavailable
+- keep solar sampling independent from display refresh
+- keep display refresh independent from DHT reads
+- keep MQTT reconnect logic independent from sensor reads
+- publish a backend-compatible payload so the server path does not fork
 
-## Implemented Node
+## Implemented Nodes
 
-The repository now includes a production-ready node implementation in `edge/solar_node.py`.
+The repository now includes:
 
-Behavior:
+- legacy Raspberry Pi node in `edge/solar_node.py`
+- ESP32 migration target in `edge/esp32/`
 
-- initializes ADS1115 on address `0x48`
-- uses `AnalogIn(ads, 0)`
-- sets `ads.gain = 4`
-- catches transient `OSError` values such as `Errno 5` and `Errno 121`
-- skips the failed iteration instead of crashing
+Current ESP32 behavior:
+
+- samples `GPIO34` at `5 Hz`
 - computes a 10-sample simple moving average
-- publishes to MQTT using `paho-mqtt`
-- batches outbound MQTT payloads every `1 second`
-- writes every successful sample to `solar_backup.csv`
-- calls `flush()` after each backup row
-- is deployable under `systemd` with `edge/systemd/sollar-panel-edge.service`
+- reads `DHT11` on `GPIO4`
+- refreshes the OLED over `GPIO18`/`GPIO19`
+- publishes MQTT aggregates every `1 second`
+- sends `temperature_c`, `humidity_pct`, `adc_raw`, voltage stats, and `uptime_seconds`
+- retries Wi-Fi, MQTT, and OLED initialization without blocking the whole device
 
 ## Suggested Data Semantics
 
 - `raw_voltage`: most recent ADC-derived voltage inside the current 1-second publish window
 - `smoothed_voltage`: most recent moving-average value inside the current 1-second publish window
+- `adc_raw`: latest raw ESP32 ADC value from `GPIO34`
 - `min_v`: minimum raw voltage seen inside the current 1-second publish window
 - `max_v`: maximum raw voltage seen inside the current 1-second publish window
 - `mean_v`: mean raw voltage across the current 1-second publish window
 - `sample_count`: number of edge samples included in the current publish window, normally `5`
 - `timestamp`: UTC ISO 8601 timestamp of the latest sample in the publish window
-- `uptime_seconds`: Raspberry Pi uptime reported from `/proc/uptime` for dashboard operations telemetry
+- `temperature_c`: latest valid DHT11 temperature reading in Celsius
+- `humidity_pct`: latest valid DHT11 relative humidity reading
+- `uptime_seconds`: ESP32 uptime in seconds for dashboard operations telemetry

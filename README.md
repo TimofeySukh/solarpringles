@@ -1,20 +1,21 @@
 # Sollar Panel
 
-Sollar Panel is an end-to-end IoT and machine learning pipeline that starts on a Raspberry Pi Zero 2 W and ends with a containerized backend, live command-center dashboard, and a phase-aware online-training loop for solar telemetry analysis.
+Sollar Panel is an end-to-end IoT and machine learning pipeline for a Pringles-can solar node. The edge baseline is now an ESP32 that samples solar voltage, reads temperature and humidity, updates a small OLED display, and streams MQTT telemetry into a containerized backend with live analytics and online ML.
 
-The current repository state is a working MVP: the edge node samples ADS1115 voltage data at `5 Hz`, publishes one aggregated MQTT packet per second, the server stores telemetry in InfluxDB, the ML engine trains a two-stage phase-plus-regression stack every 15 minutes, and the frontend renders a real-time analytical deck.
+The current repository state is a migration-ready MVP: the server stack is already live, the new ESP32 firmware publishes the same solar payload shape the backend expects, and the backend can now persist optional `temperature_c`, `humidity_pct`, and `adc_raw` fields alongside the existing voltage telemetry.
 
 ## Features
 
-- Resilient Raspberry Pi edge acquisition for ADS1115 over I2C.
-- MQTT-based ingestion with reconnect-safe behavior for unstable Wi-Fi and flaky sensor wiring.
-- Edge-side batching that keeps local sampling at `5 Hz` while publishing 1-second aggregates for a more live dashboard without overloading the Raspberry Pi.
+- ESP32 edge firmware with `GPIO34` solar sampling, `DHT11` climate readings, and SSD1306 OLED output.
+- MQTT-based ingestion with reconnect-safe behavior for unstable Wi-Fi and fragile hardware wiring.
+- Edge-side batching that keeps local sampling at `5 Hz` while publishing 1-second aggregates.
 - Time-series storage plan with `InfluxDB` as the default recommendation for a low-memory server.
 - Phase-aware online training service with feature engineering and two-stage models every 15 minutes.
 - AI Insights for a light-only solar clock, sunset ETA, sunrise ETA, bias tracking, and confidence scoring.
 - Command-center dashboard with live volatility, delta, residuals, percentiles, SNR, and uptime.
 - Lightweight FastAPI surface for history, live telemetry, AI insights, and analytics summaries.
 - Cloudflare Tunnel routing guidance that keeps the existing public site intact.
+- Legacy Raspberry Pi ADS1115 edge retained as a reference during migration.
 
 ## Documentation
 
@@ -42,7 +43,16 @@ Default published ports:
 - FastAPI scaffold on `127.0.0.1:18000`
 - Frontend scaffold on `127.0.0.1:13000`
 
-The repository also includes the Raspberry Pi edge node:
+The repository includes a new ESP32 edge firmware target:
+
+```bash
+cd /home/tim/projects/sollar_panel/edge/esp32
+cp include/secrets.example.h include/secrets.h
+# fill in Wi-Fi and MQTT values inside include/secrets.h
+# then build and flash with PlatformIO from your development machine
+```
+
+The repository also retains the legacy Raspberry Pi edge node:
 
 ```bash
 cp edge/.env.example edge/.env
@@ -50,11 +60,13 @@ python3 -m pip install -r edge/requirements.txt
 python3 edge/solar_node.py
 ```
 
-The default edge runtime behavior is:
+The default ESP32 edge runtime behavior is:
 
-- sample ADS1115 five times per second
-- append every successful sample to the local CSV backup
+- sample `GPIO34` five times per second
+- read `DHT11` on `GPIO4`
+- refresh the OLED over I2C on `GPIO18` and `GPIO19`
 - publish one aggregate MQTT packet every second
+- keep the MQTT payload compatible with the existing ingestion worker
 
 ## Configuration
 
@@ -86,6 +98,9 @@ Edge layout:
 - `edge/.env.example`
 - `edge/requirements.txt`
 - `edge/systemd/sollar-panel-edge.service`
+- `edge/esp32/platformio.ini`
+- `edge/esp32/include/secrets.example.h`
+- `edge/esp32/src/main.cpp`
 
 The backend now exposes:
 
@@ -94,6 +109,13 @@ The backend now exposes:
 - `GET /api/insights` for online-training output and confidence scores
 - `GET /api/analytics` for last-hour percentiles, SNR, uptime, live volatility, delta, residual series, latest engineered features, and phase prediction
 - `GET /api/status` for a compact runtime summary
+
+Telemetry storage now accepts:
+
+- solar voltage fields
+- `temperature_c`
+- `humidity_pct`
+- `adc_raw`
 
 The frontend is a single-file dashboard that proxies API traffic through Nginx and renders:
 

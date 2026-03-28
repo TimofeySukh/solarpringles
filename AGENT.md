@@ -4,10 +4,13 @@
 
 This repository defines an end-to-end IoT and machine learning pipeline for a small solar-panel sensor system:
 
-- Edge device: Raspberry Pi Zero 2 W running Debian or Raspberry Pi OS.
-- Sensor path: ADS1115 over I2C with a small solar panel connected to `A0`.
+- Edge baseline: ESP32 running Arduino firmware.
+- Sensor path: a small solar panel connected to `GPIO34` through the ESP32 ADC path.
+- Additional edge hardware: `DHT11` on `GPIO4` and SSD1306 OLED on I2C `GPIO18`/`GPIO19`.
 - Backend: Dockerized MQTT, time-series storage, ingestion workers, API, and frontend.
 - Goal: Collect stable telemetry, preserve raw signal quality, and build a clean dataset for future ML models.
+
+The legacy Raspberry Pi Zero 2 W implementation remains in the repository only as a reference during migration. New edge changes should target the ESP32 firmware path first.
 
 ## Language Policy
 
@@ -72,6 +75,12 @@ The new system must be isolated from the already-running website on the same ser
 ## Data Policy
 
 Preserve raw telemetry whenever possible. Filtered values are useful for UI and heuristics, but raw values are the canonical source for storage, analysis, and future ML work.
+
+For microcontroller firmware:
+
+- keep the MQTT contract server-compatible whenever possible
+- avoid high-frequency flash writes that would wear out the ESP32 storage
+- keep Wi-Fi and MQTT secrets in local untracked configuration such as `secrets.h`
 
 ## Documentation Hygiene
 

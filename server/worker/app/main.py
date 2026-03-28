@@ -90,6 +90,9 @@ class InfluxWriter:
         max_v = payload.get("max_v", payload.get("raw_max_5s"))
         mean_v = payload.get("mean_v", payload.get("raw_mean_5s"))
         sample_count = payload.get("sample_count", payload.get("sample_count_5s"))
+        adc_raw = payload.get("adc_raw")
+        temperature_c = payload.get("temperature_c")
+        humidity_pct = payload.get("humidity_pct")
 
         point = (
             Point(self.settings.influxdb_measurement)
@@ -116,6 +119,13 @@ class InfluxWriter:
         if sample_count is not None:
             point.field("sample_count", int(sample_count))
             point.field("sample_count_5s", int(sample_count))
+
+        if adc_raw is not None:
+            point.field("adc_raw", int(adc_raw))
+        if temperature_c is not None:
+            point.field("temperature_c", float(temperature_c))
+        if humidity_pct is not None:
+            point.field("humidity_pct", float(humidity_pct))
 
         uptime_seconds = payload.get("uptime_seconds")
         if uptime_seconds is not None:

@@ -122,6 +122,9 @@ Initial fields:
 - `raw_mean_5s`
 - `sample_count_5s`
 - `uptime_seconds` when present
+- `adc_raw` when present
+- `temperature_c` when present
+- `humidity_pct` when present
 
 The timestamp comes from the payload when available and falls back to current UTC when missing or invalid.
 

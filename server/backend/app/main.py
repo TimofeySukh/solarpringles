@@ -89,7 +89,10 @@ from(bucket: "{self.settings.influxdb_bucket}")
       "raw_max_5s",
       "raw_mean_5s",
       "sample_count_5s",
-      "uptime_seconds"
+      "uptime_seconds",
+      "adc_raw",
+      "temperature_c",
+      "humidity_pct"
     ]
   )
   |> sort(columns: ["_time"])
@@ -121,7 +124,10 @@ from(bucket: "{self.settings.influxdb_bucket}")
       "raw_max_5s",
       "raw_mean_5s",
       "sample_count_5s",
-      "uptime_seconds"
+      "uptime_seconds",
+      "adc_raw",
+      "temperature_c",
+      "humidity_pct"
     ]
   )
 """
@@ -158,6 +164,9 @@ from(bucket: "{self.settings.influxdb_bucket}")
             "raw_mean_5s": read_float("raw_mean_5s"),
             "sample_count_5s": read_int("sample_count_5s"),
             "uptime_seconds": read_int("uptime_seconds"),
+            "adc_raw": read_int("adc_raw"),
+            "temperature_c": read_float("temperature_c"),
+            "humidity_pct": read_float("humidity_pct"),
         }
 
     def fetch_latest(self, sensor_id: str) -> dict[str, Any] | None:
