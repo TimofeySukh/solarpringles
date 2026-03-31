@@ -1,23 +1,195 @@
-# Sollar Panel
+# Pringles-Meteorological-Station
 
-Sollar Panel is an end-to-end IoT and machine learning pipeline for a Pringles-can solar node. The edge baseline is now an ESP32 that samples solar voltage, reads temperature and humidity, updates a small OLED display, and streams MQTT telemetry into a containerized backend with live analytics and online ML.
+![Status](https://img.shields.io/badge/status-active%20prototype-58ffa9?style=flat-square)
 
-The current repository state is a migration-ready MVP: the server stack is already live, the new ESP32 firmware publishes the same solar payload shape the backend expects, and the backend can now persist optional `temperature_c`, `humidity_pct`, and `adc_raw` fields alongside the existing voltage telemetry.
+Pringles-Meteorological-Station is an edge-to-cloud weather and analytics station built inside a Pringles can.
 
-## Features
+It reads light and climate data at the edge, ships telemetry over MQTT, stores it in a time-series database, serves live and historical views through FastAPI, and runs an online ML layer that tries to infer solar time from the physics of light instead of cheating with the system clock.
 
-- ESP32 edge firmware with `GPIO34` solar sampling, `DHT11` climate readings, and SSD1306 OLED output.
-- MQTT-based ingestion with reconnect-safe behavior for unstable Wi-Fi and fragile hardware wiring.
-- Edge-side batching that keeps local sampling at `5 Hz` while publishing 1-second aggregates.
-- Time-series storage plan with `InfluxDB` as the default recommendation for a low-memory server.
-- Phase-aware online training service with feature engineering and two-stage models every 15 minutes.
-- AI Insights for a light-only solar clock, sunset ETA, sunrise ETA, bias tracking, and confidence scoring.
-- Friendly overview homepage with simple current conditions and clear paths into detailed analytics.
-- Dedicated solar and temperature detail pages instead of one overloaded dashboard.
-- Command-center solar dashboard with live volatility, delta, residuals, percentiles, SNR, and uptime.
-- Temperature detail deck with climate charts and a weighted hourly estimate built from the last 30 days.
-- Lightweight FastAPI surface for history, live telemetry, AI insights, and analytics summaries.
-- Cloudflare Tunnel routing guidance that keeps the existing public site intact.
+This is a real system, not a mockup. It just happens to live in snack packaging.
+
+## Why This Exists
+
+The project started as a practical experiment:
+
+- can a tiny improvised weather node survive as a long-running edge device
+- can it keep a clean data pipeline from sensor to UI
+- can the ML layer learn something physically meaningful from noisy light telemetry
+
+The result is a compact, opinionated station with a deliberately over-engineered backend and a deliberately under-glamorous enclosure.
+
+## System Architecture
+
+Text version of the pipeline:
+
+```text
+Solar Panel + DHT11
+        ->
+      ESP32
+        ->
+       MQTT
+        ->
+  Ingestion Worker
+        ->
+     InfluxDB
+        ->
+      FastAPI
+        ->
+   SSE / JSON API
+        ->
+Vanilla JS + Chart.js UI
+```
+
+Runtime responsibilities:
+
+- the ESP32 reads edge sensors, updates the OLED, and publishes aggregated telemetry
+- MQTT acts as the transport layer between the edge node and the server
+- the ingestion worker validates and persists telemetry into InfluxDB
+- FastAPI exposes history, live data, climate summaries, and ML insights
+- the frontend renders the public-facing dashboard
+- `ml_engine` retrains periodically on recent telemetry and refreshes the current model snapshot
+
+## Hardware Stack
+
+Current edge hardware:
+
+- `ESP32` as the main edge controller
+- a small solar panel wired directly into the ESP32 ADC path on `GPIO34`
+- `DHT11` for temperature and humidity
+- `0.96"` OLED over I2C for local monitoring
+- hardwired copper connections instead of fragile Dupont wiring
+
+Current server-side stack:
+
+- `Mosquitto` for MQTT
+- `InfluxDB` for time-series storage
+- Python ingestion and ML workers
+- `FastAPI` for the backend API
+- `Nginx` as the static frontend container
+- Cloudflare Tunnel for public exposure, for example on `weather.datanode.live`
+
+## Hardware Journey
+
+The first version was built around a Raspberry Pi Zero 2W and a breadboard.
+
+That phase included:
+
+- long soldering sessions
+- breadboard power drama
+- voltage drops down to roughly `1.6V`
+- one fairly educational short circuit
+
+After about 13 hours of what can politely be called hardware character building, the architecture was revised.
+
+The current edge node runs on ESP32 because it is:
+
+- colder
+- simpler
+- more electrically stable
+- much harder to accidentally bully into undefined behavior
+
+In short, the Raspberry Pi prototype paid the Ohms of despair so the ESP32 could live a quieter life.
+
+## Software and Data Pipeline
+
+At a high level:
+
+- the ESP32 samples the sensors at `1 Hz`
+- it publishes aggregated MQTT packets every `5 seconds`
+- the home server ingests those packets through a dedicated worker
+- the worker writes canonical telemetry into InfluxDB
+- FastAPI serves live and historical data over JSON plus `SSE`
+- the frontend is a single-page application built with Vanilla JS and `Chart.js`
+
+Core software choices:
+
+- edge firmware: Arduino-style C++ on ESP32
+- messaging: `MQTT`
+- storage: `InfluxDB`
+- API: `FastAPI`
+- frontend: Vanilla JS + `Chart.js`
+- deployment: `docker-compose`
+
+## Machine Learning Layer
+
+The ML layer lives in the `ml_engine` container and retrains online on recent telemetry.
+
+Its current job is not to forecast the stock market or discover consciousness. It does three more grounded things:
+
+1. classify the current phase of the day
+2. estimate a light-derived solar clock
+3. estimate time to sunrise or sunset when the current phase makes that meaningful
+
+### What The Models See
+
+The models work on engineered light features such as:
+
+- raw voltage
+- smoothed voltage
+- short-window and medium-window deltas
+- rolling statistics
+- voltage relative to the running daily maximum
+
+### Noise Handling
+
+The solar signal is noisy, especially at low light and during transitions. To keep it usable, the pipeline relies on:
+
+- aggregated edge packets instead of pure raw spam
+- smoothed reference values
+- rolling statistics
+- day-phase gating
+- anomaly detection for physically suspicious behavior
+
+### No Data Leakage
+
+The solar clock does **not** use system time as an input feature.
+
+That was an explicit fix after earlier iterations risked learning the clock from the answer key instead of from the signal. The current setup predicts local solar time from light behavior only.
+
+## How To Run
+
+Start the server stack:
+
+```bash
+cd /home/tim/projects/sollar_panel
+cp server/.env.example server/.env
+docker compose --env-file server/.env -f server/docker-compose.yml up --build -d
+docker compose --env-file server/.env -f server/docker-compose.yml ps
+```
+
+Default local ports:
+
+- MQTT broker: `1884`
+- InfluxDB: `127.0.0.1:18086`
+- FastAPI: `127.0.0.1:18000`
+- frontend: `127.0.0.1:13000`
+
+The edge firmware lives here:
+
+```bash
+cd /home/tim/projects/sollar_panel/edge/esp32
+cp include/secrets.example.h include/secrets.h
+```
+
+Then fill in:
+
+- Wi-Fi SSID
+- Wi-Fi password
+- MQTT host
+- MQTT port
+
+Build and flash from your development machine with PlatformIO.
+
+## Repository Map
+
+- `edge/esp32/` — ESP32 firmware
+- `server/backend/` — FastAPI API layer
+- `server/worker/` — MQTT ingestion worker
+- `server/ml_engine/` — online training and model snapshot writer
+- `server/frontend/` — static frontend and Nginx config
+- `server/docker-compose.yml` — full server stack definition
+- `docs/` — supporting architecture and implementation notes
+- `AGENT.md` — repository workflow rules
 
 ## Documentation
 
@@ -27,123 +199,18 @@ The current repository state is a migration-ready MVP: the server stack is alrea
 - [Cloudflare Tunnel integration](docs/cloudflare-tunnel.md)
 - [Repository operating rules](AGENT.md)
 
-## Quickstart
-
-Copy the environment template and start the server stack:
-
-```bash
-cd /home/tim/projects/sollar_panel
-cp server/.env.example server/.env
-docker compose --env-file server/.env -f server/docker-compose.yml up --build -d
-docker compose --env-file server/.env -f server/docker-compose.yml ps
-```
-
-Default published ports:
-
-- MQTT broker on `1884`
-- InfluxDB UI and API on `127.0.0.1:18086`
-- FastAPI scaffold on `127.0.0.1:18000`
-- Frontend scaffold on `127.0.0.1:13000`
-
-The repository includes a new ESP32 edge firmware target:
-
-```bash
-cd /home/tim/projects/sollar_panel/edge/esp32
-cp include/secrets.example.h include/secrets.h
-# fill in Wi-Fi and MQTT values inside include/secrets.h
-# then build and flash with PlatformIO from your development machine
-```
-
-The default ESP32 edge runtime behavior is:
-
-- sample `GPIO34` five times per second
-- read `DHT11` on `GPIO4`
-- refresh the OLED over I2C on `GPIO18` and `GPIO19`
-- publish one aggregate MQTT packet every second
-- keep the MQTT payload compatible with the existing ingestion worker
-
-## Configuration
-
-The runtime stack is:
-
-- `mosquitto` for MQTT
-- `influxdb` for time-series storage
-- Python workers for ingestion and daily export
-- `ml_engine` for online model training and model registry refresh
-- `FastAPI` for history, analytics, and live data delivery
-- A separate frontend container for the command-center UI
-
-The server design assumes a strict isolation boundary from the already-running public website and a constrained host with about `3 GB` of free RAM.
-
-Initial server layout:
-
-- `server/docker-compose.yml`
-- `server/.env.example`
-- `server/mosquitto/config/mosquitto.conf`
-- `server/backend/`
-- `server/worker/`
-- `server/ml_engine/`
-- `server/frontend/`
-- `server/data/exports/`
-
-Edge layout:
-
-- `edge/esp32/platformio.ini`
-- `edge/esp32/include/secrets.example.h`
-- `edge/esp32/src/main.cpp`
-
-The backend now exposes:
-
-- `GET /api/history` for aggregated day data
-- `GET /api/live` as an SSE stream for real-time telemetry
-- `GET /api/insights` for online-training output and confidence scores
-- `GET /api/analytics` for last-hour percentiles, SNR, uptime, live volatility, delta, residual series, latest engineered features, and phase prediction
-- `GET /api/climate` for recent temperature and humidity analytics plus 30-day climate summaries
-- `GET /api/climate/forecast` for the weighted hourly temperature estimate
-- `GET /api/status` for a compact runtime summary
-
-Telemetry storage now accepts:
-
-- solar voltage fields
-- `temperature_c`
-- `humidity_pct`
-- `adc_raw`
-
-The frontend now ships as a small static site that proxies API traffic through Nginx and renders:
-
-- a friendly homepage for non-technical visitors
-- a dedicated solar detail page with the full command-center analytics layout
-- a dedicated temperature detail page with climate trend charts and an hourly estimate selector
-
-The current ML stack includes:
-
-- a phase classifier for `Night`, `Sunrise`, `Day`, `Sunset`, and `Anomaly`
-- a daylight-only solar-clock regressor for the AI solar clock estimate
-- a day/sunset regressor for sunset ETA
-- a night/sunrise regressor for sunrise ETA
-- engineered features such as raw voltage, smoothed voltage, rolling standard deviation, multi-window deltas, and `voltage_to_daily_max_ratio`
-- no `hour` or `minute` inputs for any live model, so the solar-clock estimate is driven purely by light behavior
-- a lightweight tree ensemble for the regressors, because linear regression was too weak for the non-linear sunrise and sunset curve
-- a 5-second Influx downsampling step for training so the ML engine stays lightweight even when live ingestion runs at `1 Hz`
-
-## Development
-
-- Use English everywhere in the repository: code, comments, logs, API messages, UI text, and docs.
-- Follow the workflow and operational rules in [AGENT.md](AGENT.md).
-- When `README.md` needs to be revised, do it with the `github-readme` skill workflow.
-- Keep documentation synchronized with behavior changes.
-
 ## Contributing
 
-This project currently follows an internal, documentation-driven workflow. Before implementing or changing behavior:
+This repository follows a documentation-first workflow.
 
-1. Update the relevant spec in `docs/`.
-2. Update `README.md` if onboarding or architecture expectations changed.
-3. Update `AGENT.md` if the workflow or project rules changed.
-4. Create a local commit for the change set and do not push unless the user explicitly asks for it.
+Before changing behavior:
+
+1. update the relevant docs when architecture or behavior changes
+2. update `README.md` when onboarding or system understanding changes
+3. update `AGENT.md` if the workflow rules change
+4. create a local commit for each completed change set
+5. do not push unless explicitly requested
 
 ## License
 
-License terms have not been defined yet. Do not assume open-source usage rights until a license is added.
-
-Live site: https://solar.onewordtext.tech
+No license has been declared yet.
