@@ -151,7 +151,7 @@ That was an explicit fix after earlier iterations risked learning the clock from
 Start the server stack:
 
 ```bash
-cd /home/tim/projects/sollar_panel
+cd <repo-root>
 cp server/.env.example server/.env
 docker compose --env-file server/.env -f server/docker-compose.yml up --build -d
 docker compose --env-file server/.env -f server/docker-compose.yml ps
@@ -167,7 +167,7 @@ Default local ports:
 The edge firmware lives here:
 
 ```bash
-cd /home/tim/projects/sollar_panel/edge/esp32
+cd <repo-root>/edge/esp32
 cp include/secrets.example.h include/secrets.h
 ```
 

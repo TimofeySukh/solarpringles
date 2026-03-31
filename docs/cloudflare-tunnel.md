@@ -103,7 +103,7 @@ Repository template:
 Expected runtime details on the server:
 
 - binary: `/usr/local/bin/cloudflared`
-- config: `/home/server/.cloudflared/config.yml`
+- config: `~/.cloudflared/config.yml`
 - credentials file: referenced from that `config.yml`
 
 Recommended cutover:
@@ -131,7 +131,7 @@ If you want a dedicated unit name instead of `cloudflared.service`, use the repo
 Installation commands:
 
 ```bash
-sudo install -m 644 /home/server/sollar_panel/server/cloudflared/solar-tunnel.service /etc/systemd/system/solar-tunnel.service
+sudo install -m 644 /path/to/repo/server/cloudflared/solar-tunnel.service /etc/systemd/system/solar-tunnel.service
 sudo systemctl daemon-reload
 sudo systemctl enable --now solar-tunnel
 sudo systemctl status solar-tunnel --no-pager
